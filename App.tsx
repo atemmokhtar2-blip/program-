@@ -1,63 +1,117 @@
 /**
- * Local AI – Main Entry (React Native / Expo stub)
- * الواجهة الأساسية حسب المواصفات: Dark / Premium
- *
- * هذا ملف أولي – يحتاج ربط كامل بالـ UI Components
+ * Local AI – Full Application Entry
+ * Dark / Premium / Futuristic UI
+ * Local-First • No Central AI Server
  */
 
-import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, StatusBar } from 'react-native';
+import React, { useEffect, useState, useCallback } from 'react';
+import { StyleSheet, View, Text, StatusBar, ActivityIndicator } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { AICore } from './src/ai-core/AICore';
+import { ConversationStore } from './src/storage/conversations/ConversationStore';
+import { SettingsStore } from './src/storage/settings/SettingsStore';
+import { NetworkLayer } from './src/network/NetworkLayer';
+import { ChatScreen } from './src/ui/ChatScreen';
+import { ModelLibraryScreen } from './src/ui/ModelLibraryScreen';
+import { SettingsScreen } from './src/ui/SettingsScreen';
 import { colors } from './src/ui/theme';
+import { Conversation } from './src/types';
 import { BUNDLED_QWEN } from './src/ai-core/model-manager/ModelManager';
+
+type Screen = 'chat' | 'models' | 'settings';
 
 export default function App() {
   const [ready, setReady] = useState(false);
-  const [status, setStatus] = useState('Initializing...');
+  const [error, setError] = useState<string | null>(null);
+  const [screen, setScreen] = useState<Screen>('chat');
+  const [hasInternet, setHasInternet] = useState(false);
+
   const [aiCore] = useState(() => new AICore());
+  const [conversationStore] = useState(() => new ConversationStore());
+  const [settingsStore] = useState(() => new SettingsStore());
+  const [network] = useState(() => new NetworkLayer());
+
+  const [conversation, setConversation] = useState<Conversation | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
         await aiCore.initialize();
-        const device = aiCore.modelManager.getDeviceInfo();
-        setStatus(
-          `Ready • ${BUNDLED_QWEN.name} • Local • Capability: ${device?.capability ?? 'UNKNOWN'}`
-        );
+        await settingsStore.load();
+
+        const conv = aiCore.context.createConversation('محادثة جديدة', BUNDLED_QWEN.id);
+        await conversationStore.save(conv);
+        setConversation(conv);
+
+        const online = await network.isOnline();
+        setHasInternet(online);
+
         setReady(true);
       } catch (e: any) {
-        setStatus(`Init failed: ${e?.message}`);
+        setError(e?.message || 'Initialization failed');
       }
     })();
   }, []);
 
+  const handleUpdateConversation = useCallback(
+    async (c: Conversation) => {
+      setConversation(c);
+      await conversationStore.save(c);
+    },
+    [conversationStore]
+  );
+
+  if (error) {
+    return (
+      <SafeAreaView style={styles.center}>
+        <StatusBar barStyle="light-content" backgroundColor={colors.background} />
+        <Text style={styles.errorTitle}>Task Failed</Text>
+        <Text style={styles.errorText}>{error}</Text>
+      </SafeAreaView>
+    );
+  }
+
+  if (!ready || !conversation) {
+    return (
+      <SafeAreaView style={styles.center}>
+        <StatusBar barStyle="light-content" backgroundColor={colors.background} />
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={styles.loadingText}>Loading Local AI Engine...</Text>
+        <Text style={styles.loadingSub}>Qwen • On Device • No Server</Text>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={colors.background} />
-      
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.logo}>Local AI</Text>
-        <Text style={styles.modelName}>
-          {BUNDLED_QWEN.name} • Running locally
-        </Text>
-        <Text style={styles.status}>{status}</Text>
-      </View>
 
-      {/* Chat Area placeholder */}
-      <View style={styles.chatArea}>
-        <Text style={styles.placeholder}>
-          🧠 Local AI{'\n'}
-          ⚡ Fast Model{'\n'}
-          🔒 On Device{'\n\n'}
-          Chat • Models • Tools • Files • Settings
-        </Text>
-      </View>
+      {screen === 'chat' && (
+        <ChatScreen
+          aiCore={aiCore}
+          conversation={conversation}
+          onUpdateConversation={handleUpdateConversation}
+          hasInternet={hasInternet}
+          onOpenModels={() => setScreen('models')}
+          onOpenSettings={() => setScreen('settings')}
+        />
+      )}
 
-      {/* Composer placeholder */}
-      <View style={styles.composer}>
-        <Text style={styles.composerHint}>Ask anything...</Text>
-      </View>
+      {screen === 'models' && (
+        <ModelLibraryScreen
+          aiCore={aiCore}
+          onBack={() => setScreen('chat')}
+          onModelChanged={() => setScreen('chat')}
+        />
+      )}
+
+      {screen === 'settings' && (
+        <SettingsScreen
+          aiCore={aiCore}
+          settingsStore={settingsStore}
+          onBack={() => setScreen('chat')}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -67,48 +121,33 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
-  header: {
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  logo: {
-    color: colors.text,
-    fontSize: 22,
-    fontWeight: '700',
-  },
-  modelName: {
-    color: colors.primary,
-    fontSize: 14,
-    marginTop: 4,
-  },
-  status: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    marginTop: 2,
-  },
-  chatArea: {
+  center: {
     flex: 1,
+    backgroundColor: colors.background,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
   },
-  placeholder: {
+  loadingText: {
+    color: colors.text,
+    fontSize: 18,
+    marginTop: 16,
+    fontWeight: '600',
+  },
+  loadingSub: {
     color: colors.textMuted,
-    fontSize: 16,
+    fontSize: 13,
+    marginTop: 6,
+  },
+  errorTitle: {
+    color: colors.error,
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  errorText: {
+    color: colors.textSecondary,
+    fontSize: 14,
     textAlign: 'center',
-    lineHeight: 28,
-  },
-  composer: {
-    margin: 16,
-    padding: 16,
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  composerHint: {
-    color: colors.textMuted,
-    fontSize: 16,
   },
 });
