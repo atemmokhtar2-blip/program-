@@ -74,3 +74,13 @@ npx expo start
 ## القاعدة النهائية
 
 «التطبيق هو المنصة، الهاتف هو بيئة التشغيل، النموذج المحلي هو قلب الذكاء الاصطناعي، والإنترنت مجرد قدرة إضافية عند الحاجة—not the foundation of the product.»
+
+## تجريبي أندرويد
+
+شوف الملف: [docs/DEMO_ANDROID.md](docs/DEMO_ANDROID.md)
+
+```bash
+npm install
+npx expo start          # تجربة سريعة
+eas build -p android --profile preview   # بناء APK
+```

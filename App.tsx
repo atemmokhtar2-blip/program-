@@ -6,7 +6,7 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import { StyleSheet, View, Text, StatusBar, ActivityIndicator } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { AICore } from './src/ai-core/AICore';
 import { ConversationStore } from './src/storage/conversations/ConversationStore';
 import { SettingsStore } from './src/storage/settings/SettingsStore';
@@ -63,26 +63,31 @@ export default function App() {
 
   if (error) {
     return (
+      <SafeAreaProvider>
       <SafeAreaView style={styles.center}>
         <StatusBar barStyle="light-content" backgroundColor={colors.background} />
         <Text style={styles.errorTitle}>Task Failed</Text>
         <Text style={styles.errorText}>{error}</Text>
       </SafeAreaView>
+      </SafeAreaProvider>
     );
   }
 
   if (!ready || !conversation) {
     return (
+      <SafeAreaProvider>
       <SafeAreaView style={styles.center}>
         <StatusBar barStyle="light-content" backgroundColor={colors.background} />
         <ActivityIndicator size="large" color={colors.primary} />
         <Text style={styles.loadingText}>Loading Local AI Engine...</Text>
         <Text style={styles.loadingSub}>Qwen • On Device • No Server</Text>
       </SafeAreaView>
+      </SafeAreaProvider>
     );
   }
 
   return (
+    <SafeAreaProvider>
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={colors.background} />
 
@@ -113,6 +118,7 @@ export default function App() {
         />
       )}
     </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 

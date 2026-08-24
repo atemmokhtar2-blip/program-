@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "Local AI",
+    "slug": "local-ai",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "scheme": "localai",
+    "splash": {
+      "backgroundColor": "#0A0A0B",
+      "resizeMode": "contain"
+    },
+    "android": {
+      "package": "com.localai.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#0A0A0B"
+      },
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ],
+      "versionCode": 1
+    },
+    "ios": {
+      "bundleIdentifier": "com.localai.app",
+      "supportsTablet": true
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-file-system"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "local-ai-demo"
+      }
+    }
+  }
+}
