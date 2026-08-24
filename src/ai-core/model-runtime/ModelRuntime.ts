@@ -3,15 +3,16 @@
  * تشغيل النموذج المحلي مع دعم Streaming وإيقاف التوليد
  * حسب المواصفات – القسم 3 و 21
  *
- * حالياً: Mock Runtime قابل للاستبدال بـ llama.rn / llama.cpp / MediaPipe
+ * يحاول استخدام RealLlamaRuntime (llama-cpp-python) إذا كان متاحًا،
+ * وإلا يعود إلى Mock.
  */
 
 import {
   GenerationOptions,
   GenerationResult,
-  ConfidenceLevel,
   ModelInfo,
 } from '../../types';
+import { RealLlamaRuntime } from './RealLlamaRuntime';
 
 export interface IModelRuntime {
   load(model: ModelInfo): Promise<void>;
@@ -26,25 +27,17 @@ export interface IModelRuntime {
 }
 
 /**
- * Mock Runtime – يحاكي Streaming و Cancellation
- * يجب استبداله بـ runtime حقيقي يدعم GGUF / Qwen
+ * Mock Runtime – احتياطي فقط إذا فشل الـ real runtime
  */
-export class MockModelRuntime implements IModelRuntime {
+class MockModelRuntime implements IModelRuntime {
   private loadedModel: ModelInfo | null = null;
-  private isGenerating = false;
 
   async load(model: ModelInfo): Promise<void> {
-    if (this.loadedModel?.id === model.id) return;
-
-    // في الحقيقي: تحميل الأوزان في الذاكرة
-    // هنا نحاكي وقت التحميل
-    await new Promise((r) => setTimeout(r, 300));
     this.loadedModel = model;
   }
 
   async unload(): Promise<void> {
     this.loadedModel = null;
-    // في الحقيقي: تحرير الذاكرة
   }
 
   isLoaded(): boolean {
@@ -57,80 +50,12 @@ export class MockModelRuntime implements IModelRuntime {
 
   async generate(
     prompt: string,
-    systemPrompt: string | undefined,
+    _systemPrompt: string | undefined,
     options: GenerationOptions
   ): Promise<GenerationResult> {
-    if (!this.loadedModel) {
-      return {
-        text: '',
-        confidence: 'UNKNOWN',
-        finishReason: 'error',
-        tokensGenerated: 0,
-      };
-    }
-
-    this.isGenerating = true;
-    const signal = options.signal;
-
-    // System prompt صارم ضد الهلوسة
-    const antiHallucination = `
-أنت مساعد ذكاء اصطناعي محلي يعمل على جهاز المستخدم.
-القواعد الصارمة:
-- لا تختلق معلومات.
-- إذا لم تكن متأكدًا، قل ذلك بوضوح.
-- لا تختلق أسعار أو أخبار أو بيانات حية.
-- لا تختلق مصادر أو روابط.
-- كن دقيقًا وصادقًا.
-`;
-
-    const fullSystem = (systemPrompt || '') + '\n' + antiHallucination;
-
-    // محاكاة رد بسيط (في الحقيقي: inference)
-    const mockResponse = this.buildMockResponse(prompt);
-
-    let generated = '';
-    const tokens = mockResponse.split(/(\s+)/); // تقريب بسيط
-
-    try {
-      for (const token of tokens) {
-        if (signal?.aborted) {
-          this.isGenerating = false;
-          return {
-            text: generated,
-            confidence: 'MEDIUM',
-            finishReason: 'cancelled',
-            tokensGenerated: generated.split(/\s+/).length,
-          };
-        }
-
-        generated += token;
-        options.onToken?.(token);
-        // تأخير بسيط لمحاكاة streaming
-        await new Promise((r) => setTimeout(r, 25));
-      }
-
-      this.isGenerating = false;
-      return {
-        text: generated.trim(),
-        confidence: 'MEDIUM',
-        finishReason: 'stop',
-        tokensGenerated: tokens.filter((t) => t.trim()).length,
-      };
-    } catch (e) {
-      this.isGenerating = false;
-      return {
-        text: generated,
-        confidence: 'LOW',
-        finishReason: 'error',
-        tokensGenerated: generated.split(/\s+/).length,
-      };
-    }
-  }
-
-  private buildMockResponse(prompt: string): string {
     const lower = prompt.toLowerCase();
+    let text = '';
 
-    // ردود محترمة للقواعد
     if (
       lower.includes('سعر') ||
       lower.includes('price') ||
@@ -139,39 +64,57 @@ export class MockModelRuntime implements IModelRuntime {
       lower.includes('الطقس') ||
       lower.includes('weather')
     ) {
-      return (
-        'هذه المعلومة تحتاج مصدرًا حديثًا غير متاح حاليًا لأنني أعمل كنموذج محلي بدون اتصال بالإنترنت في هذه اللحظة.\n\n' +
-        'عندما يتوفر الإنترنت يمكنني استخدام أدوات البحث للحصول على بيانات محدثة. حاليًا لا يمكنني اختلاق السعر أو الخبر.'
-      );
+      text =
+        'هذه المعلومة تحتاج مصدرًا حديثًا غير متاح حاليًا لأنني أعمل كنموذج محلي.\n\n' +
+        'لا يمكنني اختلاق السعر أو الخبر.';
+    } else if (lower.includes('اكتب') || lower.includes('write') || lower.includes('قصة')) {
+      text =
+        'إليك قصة قصيرة:\n\nفي مدينة هادئة على حافة الصحراء، عاش شاب يحلم ببناء آلة تفهم لغة الرياح...';
+    } else if (lower.includes('كود') || lower.includes('code') || lower.includes('python')) {
+      text =
+        '```python\ndef hello_local_ai():\n    print("Hello from on-device Qwen!")\n    return "Local-first AI"\n\nhello_local_ai()\n```';
+    } else {
+      text =
+        'أنا النموذج المحلي (Qwen Local). كيف يمكنني مساعدتك؟';
     }
 
-    if (lower.includes('اكتب') || lower.includes('write') || lower.includes('قصة')) {
-      return (
-        'إليك قصة قصيرة:\n\n' +
-        'في مدينة هادئة على حافة الصحراء، عاش شاب يحلم ببناء آلة تفهم لغة الرياح. ' +
-        'كل مساء كان يجمع الرمال ويصنع منها أشكالًا صغيرة، حتى جاء يوم اكتشف فيه أن الرمال نفسها كانت تتحدث إليه بهمس خفيف.\n\n' +
-        '(تم التوليد بواسطة النموذج المحلي)'
-      );
+    // محاكاة streaming
+    const tokens = text.split(/(\s+)/);
+    let generated = '';
+    for (const t of tokens) {
+      if (options.signal?.aborted) {
+        return {
+          text: generated,
+          confidence: 'MEDIUM',
+          finishReason: 'cancelled',
+          tokensGenerated: generated.split(/\s+/).filter(Boolean).length,
+        };
+      }
+      generated += t;
+      options.onToken?.(t);
+      await new Promise((r) => setTimeout(r, 15));
     }
 
-    if (lower.includes('كود') || lower.includes('code') || lower.includes('python')) {
-      return (
-        '```python\ndef hello_local_ai():\n    print("Hello from on-device Qwen!")\n    return "Local-first AI"\n\nhello_local_ai()\n```\n\n' +
-        'هذا مثال بسيط تم توليده محليًا.'
-      );
-    }
-
-    return (
-      'أنا النموذج المحلي (Qwen Local) وأعمل على جهازك مباشرة بدون الحاجة إلى إنترنت.\n\n' +
-      'كيف يمكنني مساعدتك؟ يمكنني الكتابة، التلخيص، شرح المفاهيم، كتابة كود بسيط، والمزيد — طالما لا تحتاج بيانات حية متغيرة.'
-    );
+    return {
+      text: generated.trim(),
+      confidence: 'MEDIUM',
+      finishReason: 'stop',
+      tokensGenerated: tokens.filter((t) => t.trim()).length,
+    };
   }
 }
 
 /**
- * Factory – يمكن استبدالها بـ RealRuntime لاحقًا
+ * Factory: يفضل RealLlamaRuntime إذا كان ملف النموذج موجودًا
  */
 export function createModelRuntime(): IModelRuntime {
-  // في الإنتاج: التحقق من وجود native module ثم إرجاع RealLlamaRuntime
-  return new MockModelRuntime();
+  // في بيئة السيرفر: نستخدم RealLlamaRuntime
+  // على الموبايل: استبدل بـ llama.rn bindings
+  try {
+    return new RealLlamaRuntime();
+  } catch {
+    return new MockModelRuntime();
+  }
 }
+
+export { MockModelRuntime };
