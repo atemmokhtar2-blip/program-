@@ -2,6 +2,9 @@
  * Model Manager
  * مسؤول عن اكتشاف / تنزيل / تشغيل / حذف النماذج المحلية
  * حسب المواصفات التنفيذية – القسم 4 و 5
+ *
+ * Device detection: reads real system info where possible (Linux /proc).
+ * On real mobile: replace with native modules (DeviceInfo / expo-device).
  */
 
 import {
@@ -11,19 +14,26 @@ import {
   ModelStatus,
   Quantization,
 } from '../../types';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 
-/** النموذج المدمج الأساسي – Qwen خفيف */
+/** المسار الفعلي للنموذج المدمج الذي تم تنزيله */
+const BUNDLED_MODEL_FILENAME = 'Qwen2.5-0.5B-Instruct-Q4_K_M.gguf';
+const BUNDLED_MODEL_PATH = path.join(process.cwd(), 'models', BUNDLED_MODEL_FILENAME);
+
+/** النموذج المدمج الأساسي – Qwen 0.5B Q4_K_M (~380 MB) */
 export const BUNDLED_QWEN: ModelInfo = {
   id: 'qwen-local-bundled',
   name: 'Qwen Local',
-  version: '2.5-0.5B',
-  sizeBytes: 450 * 1024 * 1024, // ~450 MB تقدير لـ 4-bit
+  version: '2.5-0.5B-Instruct',
+  sizeBytes: 397807936, // الحجم الفعلي للملف الذي تم تنزيله
   quantization: 'Q4_K_M',
-  ramRequirementGB: 1.2,
+  ramRequirementGB: 1.0,
   capabilities: ['chat', 'instruction', 'streaming', 'stop-generation'],
   status: 'installed',
   isBundled: true,
-  localPath: 'bundled://qwen-local',
+  localPath: BUNDLED_MODEL_PATH,
 };
 
 /** أمثلة نماذج إضافية يمكن تنزيلها */
@@ -70,35 +80,77 @@ export class ModelManager {
   private activeModelId: string | null = null;
 
   constructor() {
-    // تحميل النماذج المعروفة
     AVAILABLE_MODELS.forEach((m) => this.models.set(m.id, { ...m }));
+    // تأكيد وجود الملف الحقيقي للنموذج المدمج
+    this.verifyBundledModelExists();
   }
 
-  /** فحص مواصفات الجهاز محليًا */
-  async detectDevice(): Promise<DeviceInfo> {
-    // في تطبيق حقيقي: استخدام native modules لقراءة RAM / CPU / etc.
-    // هنا نستخدم قيم افتراضية آمنة (يمكن استبدالها لاحقًا)
-    const info: DeviceInfo = {
-      ramGB: 6, // مثال
-      cpuCores: 8,
-      architecture: 'arm64-v8a',
-      availableStorageGB: 20,
-      hasGpuAcceleration: true,
-      os: 'Android',
-      osVersion: '14',
-      capability: 'MEDIUM',
-    };
-
-    // تصنيف القدرة
-    if (info.ramGB < 4) {
-      info.capability = 'LOW';
-    } else if (info.ramGB < 8) {
-      info.capability = 'MEDIUM';
-    } else if (info.ramGB < 12) {
-      info.capability = 'HIGH';
-    } else {
-      info.capability = 'ULTRA';
+  private verifyBundledModelExists(): void {
+    try {
+      if (fs.existsSync(BUNDLED_MODEL_PATH)) {
+        const stats = fs.statSync(BUNDLED_MODEL_PATH);
+        const m = this.models.get(BUNDLED_QWEN.id)!;
+        m.sizeBytes = stats.size;
+        m.status = 'installed';
+        m.localPath = BUNDLED_MODEL_PATH;
+        this.models.set(BUNDLED_QWEN.id, m);
+      } else {
+        const m = this.models.get(BUNDLED_QWEN.id)!;
+        m.status = 'not_installed';
+        this.models.set(BUNDLED_QWEN.id, m);
+      }
+    } catch {
+      // ignore
     }
+  }
+
+  /**
+   * فحص مواصفات الجهاز الحقيقي (Linux /proc + os)
+   * على الهاتف الحقيقي: استبدل بـ native DeviceInfo / expo-device / React Native DeviceInfo
+   */
+  async detectDevice(): Promise<DeviceInfo> {
+    let ramGB = 2;
+    let cpuCores = os.cpus().length || 2;
+    let architecture = os.arch();
+    let availableStorageGB = 10;
+    let osName = os.platform();
+    let osVersion = os.release();
+
+    try {
+      // RAM الحقيقي من /proc/meminfo
+      const meminfo = fs.readFileSync('/proc/meminfo', 'utf8');
+      const match = meminfo.match(/MemTotal:\s+(\d+)\s+kB/);
+      if (match) {
+        ramGB = Math.round((parseInt(match[1], 10) / 1024 / 1024) * 10) / 10;
+      }
+    } catch {}
+
+    try {
+      // المساحة المتاحة
+      const { execSync } = require('child_process');
+      const df = execSync('df -BG / | tail -1').toString();
+      const parts = df.trim().split(/\s+/);
+      if (parts.length >= 4) {
+        availableStorageGB = parseInt(parts[3].replace('G', ''), 10) || 10;
+      }
+    } catch {}
+
+    let capability: DeviceCapability = 'LOW';
+    if (ramGB < 3) capability = 'LOW';
+    else if (ramGB < 6) capability = 'MEDIUM';
+    else if (ramGB < 12) capability = 'HIGH';
+    else capability = 'ULTRA';
+
+    const info: DeviceInfo = {
+      ramGB,
+      cpuCores,
+      architecture,
+      availableStorageGB,
+      hasGpuAcceleration: false, // على هذا السيرفر لا يوجد GPU مخصص للموبايل
+      os: osName,
+      osVersion,
+      capability,
+    };
 
     this.deviceInfo = info;
     return info;
@@ -112,7 +164,6 @@ export class ModelManager {
     return this.deviceInfo?.capability ?? 'LOW';
   }
 
-  /** قائمة كل النماذج */
   listModels(): ModelInfo[] {
     return Array.from(this.models.values());
   }
@@ -132,54 +183,38 @@ export class ModelManager {
 
   setActiveModel(id: string): boolean {
     const model = this.models.get(id);
-    if (!model || model.status !== 'installed') {
-      return false;
-    }
-
-    // منع تشغيل نموذج غير مناسب للجهاز
-    if (!this.canRunModel(model)) {
-      return false;
-    }
-
+    if (!model || model.status !== 'installed') return false;
+    if (!this.canRunModel(model)) return false;
     this.activeModelId = id;
     return true;
   }
 
-  /** هل الجهاز يقدر يشغل هذا النموذج؟ */
   canRunModel(model: ModelInfo): boolean {
     const device = this.deviceInfo;
-    if (!device) return model.isBundled; // النموذج المدمج يُسمح دائمًا تقريبًا
-
-    // قاعدة صارمة: لا تسمح بنموذج يحتاج أكثر من 80% من الـ RAM
-    if (model.ramRequirementGB > device.ramGB * 0.8) {
-      return false;
-    }
-
-    // على LOW لا تسمح بنماذج أكبر من 2GB تقريبًا
-    if (device.capability === 'LOW' && model.ramRequirementGB > 2.0) {
-      return false;
-    }
-
+    if (!device) return model.isBundled;
+    if (model.ramRequirementGB > device.ramGB * 0.85) return false;
+    if (device.capability === 'LOW' && model.ramRequirementGB > 1.5) return false;
     return true;
   }
 
-  /** بدء تنزيل نموذج */
+  /**
+   * تنزيل حقيقي للنموذج (يستخدم curl/fetch)
+   * يحفظ الملف في models/ ويتحقق من الحجم
+   */
   async downloadModel(
     id: string,
     onProgress?: (progress: number) => void
   ): Promise<{ success: boolean; error?: string }> {
     const model = this.models.get(id);
-    if (!model) {
-      return { success: false, error: 'Model not found' };
-    }
-    if (model.status === 'installed') {
+    if (!model) return { success: false, error: 'Model not found' };
+    if (model.status === 'installed' && model.localPath && fs.existsSync(model.localPath)) {
       return { success: true };
     }
     if (model.isBundled) {
-      return { success: true };
+      this.verifyBundledModelExists();
+      return { success: this.models.get(id)?.status === 'installed' };
     }
 
-    // تحقق من المساحة
     const device = this.deviceInfo;
     if (device && model.sizeBytes / (1024 * 1024 * 1024) > device.availableStorageGB * 0.9) {
       return { success: false, error: 'Insufficient storage space' };
@@ -187,39 +222,65 @@ export class ModelManager {
 
     model.status = 'downloading';
     model.downloadProgress = 0;
+    this.models.set(id, { ...model });
 
-    // محاكاة التحميل (في التطبيق الحقيقي: download + verify checksum)
-    // هنا placeholder – يجب استبداله بـ real download إلى FileSystem
+    // روابط مباشرة معروفة (يمكن توسيعها)
+    const downloadUrls: Record<string, string> = {
+      // أضف روابط حقيقية هنا عند الحاجة
+    };
+
+    const url = downloadUrls[id];
+    if (!url) {
+      model.status = 'not_installed';
+      model.downloadProgress = 0;
+      return {
+        success: false,
+        error: 'No download URL configured for this model. Add the GGUF URL in ModelManager.',
+      };
+    }
+
     try {
-      for (let i = 1; i <= 10; i++) {
-        await new Promise((r) => setTimeout(r, 200));
-        model.downloadProgress = i / 10;
-        onProgress?.(model.downloadProgress);
-      }
+      const dest = path.join(process.cwd(), 'models', `${id}.gguf`);
+      // في تطبيق الموبايل الحقيقي: استخدم expo-file-system downloadResumable
+      // هنا نستخدم child_process + curl كتنفيذ حقيقي على السيرفر
+      const { spawn } = require('child_process');
+      await new Promise<void>((resolve, reject) => {
+        const proc = spawn('curl', ['-L', '-o', dest, url, '--progress-bar']);
+        proc.on('close', (code: number) => (code === 0 ? resolve() : reject(new Error('curl failed'))));
+        proc.on('error', reject);
+      });
 
-      // بعد التحميل الناجح
+      if (!fs.existsSync(dest)) {
+        throw new Error('Downloaded file missing');
+      }
+      const stats = fs.statSync(dest);
       model.status = 'installed';
-      model.localPath = `models/${id}.gguf`;
+      model.localPath = dest;
+      model.sizeBytes = stats.size;
       model.downloadProgress = 1;
       this.models.set(id, { ...model });
+      onProgress?.(1);
       return { success: true };
-    } catch (e) {
+    } catch (e: any) {
       model.status = 'error';
       model.downloadProgress = 0;
-      return { success: false, error: 'Model download failed. The model was not installed.' };
+      this.models.set(id, { ...model });
+      return {
+        success: false,
+        error: e?.message || 'Model download failed. The model was not installed.',
+      };
     }
   }
 
-  /** إيقاف التحميل (placeholder) */
   cancelDownload(id: string): void {
     const model = this.models.get(id);
     if (model && model.status === 'downloading') {
       model.status = 'not_installed';
       model.downloadProgress = 0;
+      this.models.set(id, { ...model });
     }
   }
 
-  /** حذف نموذج */
   async deleteModel(id: string): Promise<{ success: boolean; error?: string }> {
     const model = this.models.get(id);
     if (!model) return { success: false, error: 'Model not found' };
@@ -227,21 +288,30 @@ export class ModelManager {
       return { success: false, error: 'Cannot delete the bundled model' };
     }
     if (this.activeModelId === id) {
-      this.activeModelId = BUNDLED_QWEN.id; // العودة للنموذج المدمج
+      this.activeModelId = BUNDLED_QWEN.id;
     }
-
+    if (model.localPath && fs.existsSync(model.localPath)) {
+      try {
+        fs.unlinkSync(model.localPath);
+      } catch {}
+    }
     model.status = 'not_installed';
     model.localPath = undefined;
     model.downloadProgress = 0;
-    // في الحقيقي: حذف الملف من التخزين
+    this.models.set(id, { ...model });
     return { success: true };
   }
 
-  /** التحقق من سلامة الملف (placeholder) */
   async verifyModelIntegrity(id: string): Promise<boolean> {
     const model = this.models.get(id);
-    if (!model || model.status !== 'installed') return false;
-    // في الحقيقي: checksum / magic header check
-    return true;
+    if (!model || model.status !== 'installed' || !model.localPath) return false;
+    try {
+      if (!fs.existsSync(model.localPath)) return false;
+      const stats = fs.statSync(model.localPath);
+      // تحقق بسيط من الحجم (في الإنتاج: checksum)
+      return stats.size > 100 * 1024 * 1024; // أكبر من 100MB على الأقل
+    } catch {
+      return false;
+    }
   }
 }
